@@ -29,7 +29,7 @@ readSeqData <- function(file) {
 }
 
 
-## Script body
+## Script
 ##----------------------------------------------------------------------------
 ## Data importing
 cat("Collecting paths to data... ")
@@ -43,10 +43,15 @@ cat("done.\n")
 ## Identify singletons appearing across replicates
 singletons <- df[df$copy == 1, c("seq", "patient")]
 across.replicates <- which(duplicated(singletons))
+repl.singletons <- singletons[across.replicates, ]
+
+# Output results
 n.singletons.replicated <- length(across.replicates)
 n.singletons <- length(singletons$seq)
 proportion.singletons <- n.singletons.replicated/n.singletons
 cat("\n\t", "Total singletons across replicates:", n.singletons.replicated,
     "\n\t", "Proportion of total singletons:", n.singletons.replicated, "/", 
     n.singletons, "=", proportion.singletons, "\n\n")
+print(summary(repl.singletons))
+
 
