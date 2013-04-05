@@ -3,4 +3,4 @@
 .Rhistory
 data/
 Immunoseq_VDJ_XSCID/
-preliminary_data_processing.R
+mysql_info.R
