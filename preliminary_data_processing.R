@@ -65,8 +65,8 @@ cat("done.\n")
 
 ## Write sequence data in FASTA format
 ## This takes a while and only needs to be done once.
-if (FALSE) {
-  seqnames <- paste(df$accn, 1:length(df$seq), sep='_')
+if (TRUE) {
+  seqnames <- paste(df$accn, df$replicate, df$copy, 1:length(df$seq), sep='_')
   seqs <- df$seq
   names(seqs) <- seqnames
   fasta.file <- file.path(path, "unfiltered.all.fasta")
