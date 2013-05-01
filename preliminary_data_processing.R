@@ -4,7 +4,7 @@
 ##----------------------------------------------------------------------------
 library(RMySQL)
 library(seqinr)
-
+library(Biostrings)
 
 ## Constants
 ##----------------------------------------------------------------------------
@@ -14,21 +14,36 @@ library(seqinr)
 source("mysql_info.R")
 
 # File info
-path  <- 	"data/patients/processed/unfiltered"
-files <-  list.files(path = path, pattern = glob2rx("*.adap.txt"))
-
+unfiltered.path  <-   "data/patients/processed/unfiltered"
+filtered.path <- "data/patients/processed/filtered"
+files <-  list.files(path = unfiltered.path, pattern = glob2rx("*.adap.txt"))
+filtered.files <- list.files(path = filtered.path, pattern = glob2rx("*.tsv"))
 
 ## Function definitions
 ##----------------------------------------------------------------------------
 
-createMetadata <- function(string, con) {
-  path <- file.path(path, string)
-  r <- substr(string, 9, 9)
+## Utility function. Given a filename of the form 'GTSP....[a|b|c]', the function returns the
+## GTSP accession number and replicate (where a=1, b=2, c=3)
+splitAccnRepl <- function(fname) {
+  r <- substr(fname, 9, 9)
   # currently cannot handle replicates past "c". if more, make better soltn
   stopifnot(r %in% c("a", "b", "c"))
   replicate <- ifelse(r == "a", 1,
                       ifelse(r == "b", 2, 3))
-  accn <- substr(string, 1, 8)
+  accn <- substr(fname, 1, 8)
+  return(c(accn, replicate))
+}
+
+## Retrieves information from a MySQL database about a particular sample
+## determined by the filename (of the form 'GTSP....[a|b|c]')
+##
+## Note: functions beginning with '.' are internal functions and
+##       are generally run in a rbind/lapply wrapper.
+.createMetadata <- function(fname, con) {
+  path <- file.path(unfiltered.path, fname)
+  accn.repl <- splitAccnRepl(fname)
+  accn <- accn.repl[1]
+  replicate <- accn.repl[2]
   mdat <- dbGetQuery(con, sprintf("select Patient, CellType, Timepoint from %s where SpecimenAccNum like '%s';",
                                   my.table, accn))
   patient <- mdat$Patient
@@ -39,100 +54,90 @@ createMetadata <- function(string, con) {
                     timepoint=timepoint, replicate=replicate))
 }
 
-# Reads in unfiltered, whitespace-delimited sequence file with {seq, copy}
-# column order (use with lapply, as below)
-readSeqData <- function(file) {
-  dat.tmp <- read.delim(as.character(file), sep="", header=F, 
+## Reads in unfiltered, whitespace-delimited sequence file with {seq, copy}
+## column order and incorporates metadata (from the metadata data frame) into
+## the returned data frame.
+##
+## Note: functions beginning with '.' are internal functions and
+##       are generally run in a rbind/lapply wrapper.
+.readSeqData <- function(fname) {
+  dat.tmp <- read.delim(as.character(fname), sep="", header=F, 
                         stringsAsFactors=F)
-  meta    <- as.list(subset(metadata, path == file))
+  meta    <- as.list(subset(metadata, path == fname))
   return(data.frame(seq=dat.tmp[,1], copy=dat.tmp[,2], meta))  
 }
 
 
-## Script
-##----------------------------------------------------------------------------
-
-## Read sequence data
-cat("Collecting metadata... ")
-con <- dbConnect(MySQL(), host=my.host, user=my.user, password=my.pass, dbname=my.db)
-metadata  <- do.call(rbind, lapply(files, createMetadata, con))
-cat("done.\n")
-cat("Reading sequence data... ")
-df <- do.call(rbind, lapply(metadata$path, readSeqData))
-df$seq <- as.character(df$seq)
-cat("done.\n")
-
+## Reads in a processed, filtered sequence data from Adaptive
+##
+## Note: functions beginning with '.' are internal functions and
+##       are generally run in a rbind/lapply wrapper.
+.readFiltSeqData <- function(fname, path) {
+  accn.repl <- splitAccnRepl(fname)
+  .accn <- accn.repl[1]
+  .replicate <- accn.repl[2]
+  dat.tmp <- read.delim(file.path(path, as.character(fname)), stringsAsFactors=F)
+  # Renaming 'copy' column to avoid collision with unfiltered sequence df column 
+  dat.tmp$filt.copy <- dat.tmp$copy
+  dat.tmp$seq <- dat.tmp$nucleotide
+  dat.tmp$nucleotide <- NULL
+  dat.tmp$copy <- NULL
+  dat.tmp <- data.frame(accn = .accn, replicate = .replicate, dat.tmp)
+  dat.tmp$accn <- as.character(dat.tmp$accn)
+  dat.tmp$replicate <- as.character(dat.tmp$replicate)
+  return(dat.tmp)
+}
 
 ## Write sequence data in FASTA format
-## This takes a while and only needs to be done once.
-if (TRUE) {
-  seqnames <- paste(df$accn, df$replicate, df$copy, 1:length(df$seq), sep='_')
+writeSeqToFasta <- function(df) {
+  seqnames <- paste(df$accn, df$replicate, df$idx, sep='_')
   seqs <- df$seq
   names(seqs) <- seqnames
-  fasta.file <- file.path(path, "unfiltered.all.fasta")
+  fasta.file <- file.path(unfiltered.path, "unfiltered.all.fasta")
   write.fasta(as.list(seqs), seqnames, file.out=fasta.file)
 }
 
-## Run igblast all the sequences against the immunoglobulin V/D/J genes.
-## (This takes considerable time, so ensure you want to do it by
-##  switching condition to TRUE)
-if (FALSE) {
-  # Ensure you have igblast installed from NCBI with the database directory
-  # included (or specify path below)
-  dbpath <- "/usr/local/ncbi/igblast/database/"
-  fasta.file <- file.path(path, "unfiltered.all.fasta")
-  out.file <- file.path(path, "unfiltered.all.blast.out")
-  cmd <- sprintf("igblastn -germline_db_V %s -germline_db_D %s -germline_db_J %s -organism human -domain_system kabat -query %s -out %s",
-                 file.path(dbpath, "human_gl_V"), file.path(dbpath, "human_gl_D"), file.path(dbpath, "human_gl_J", fasta.file), out.file)
-  system(cmd)
+## Identify singletons that
+idSingletons <- function(df) {
+  singletons <- subset(df, copy == 1, select=c(seq, accn))
+  across.replicates <- which(duplicated(singletons))
+  repl.singletons <- singletons[across.replicates, ]
+  n.singletons.replicated <- length(across.replicates)
+  n.singletons <- length(singletons$seq)
+  proportion.singletons <- n.singletons.replicated/n.singletons
+  cat("\n\t", "Total singletons across replicates:", n.singletons.replicated,
+      "\n\t", "Proportion of total singletons:", n.singletons.replicated, "/", 
+      n.singletons, "=", proportion.singletons, "\n\n")
+  print(summary(repl.singletons))
 }
 
+## Main script method. Source the document then run this function.
+main <- function() {
 
+  cat("Collecting metadata... \n")
+  con <- dbConnect(MySQL(), host=my.host, user=my.user, password=my.pass, dbname=my.db)
+  metadata  <- do.call(rbind, lapply(files, createMetadata, con))
 
-## Identify singletons appearing across replicates
-singletons <- subset(df, copy == 1, select=c(seq, accn))
-across.replicates <- which(duplicated(singletons))
-repl.singletons <- singletons[across.replicates, ]
-# Output results
-n.singletons.replicated <- length(across.replicates)
-n.singletons <- length(singletons$seq)
-proportion.singletons <- n.singletons.replicated/n.singletons
-cat("\n\t", "Total singletons across replicates:", n.singletons.replicated,
-    "\n\t", "Proportion of total singletons:", n.singletons.replicated, "/", 
-    n.singletons, "=", proportion.singletons, "\n\n")
-print(summary(repl.singletons))
+  cat("Reading unfiltered sequence data... \n")
+  df <- do.call(rbind, lapply(metadata$path, readSeqData))
+  # Store all the sequences as their reverse complement 
+  # (to allow comparison w/ filtered data)
+  df$seq <- DNAStringSet(as.character(df$seq))
+  df$seq <- as.character(reverseComplement(df$seq))
+  # Convert from factors
+  df$accn <- as.character(df$accn)
+  df$replicate <- as.character(df$replicate)
 
-## Identify single- or doubletons (lowcn) appearing across cell types
-# Limit to samples at the d365 timepoint
-tmp.df <- subset(df, timepoint == "d365")
-for (.accn in unique(tmp.df$accn)){
-  df.rep1 <- subset(tmp.df, replicate == 1 && accn == .accn)
-  for (r in 2:3) {
-    sset <- subset(tmp.df, replicate == r && accn == .accn)
-    for (.seq in sset$seq) {
-      row <- subset(sset, seq == .seq)
-      df.rep1[df.rep1$seq == .seq]$copy += row$copy
-    }
-  }
+  cat("Reading filtered sequence data... \n")
+  df.filt <- do.call(rbind, lapply(filtered.files, readFiltSeqData, filtered.path))
+
+  cat("Joining data by sequence, replicate and accession... ")
+  df.tmp <- merge(df, df.filt, by=c("accn", "seq", "replicate"), all=T)
+  # idx is an unique identifier for each row that is used to identify that row
+  # when the sequences are processed by external programs (i.e. as a FASTA accn #)
+  df.tmp$idx <- 1:length(df.tmp$seq)
+  cat("done.\n")
 }
-df.rep1 <- subset(tmp.df, replicate == 1)
-for (r in 2:3) {
-  sset <- subset(tmp.df, replicate == r)
-  for (seq in sset$seq) {
-    row <- subset(sset, seq == seq)
-    df.rep1[df.rep1$seq == seq]$copy
-  }
-}
-for (seq in tmp.df$seq) {
-  r <- subset(tmp.df, seq == seq)
-  if (r$replicate > 1) {
-    copy <-
-  }
-} 
-singletons <- subset(df, copy <= 2, select = c(seq, accn, cell.type))
-#lowcn <- subset(df, copy <= 2, select=c())
-
-
 
 
 
