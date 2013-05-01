@@ -16,7 +16,7 @@
 set -o errexit
 
 CHUNKS=16
-DB="$HOME/vdj_xscid/unfiltered.all.db"
+DB="$HOME/unfiltered.all.db"
 BLAST="blastn -db ${DB} -outfmt 7 -query "
 
 fname=`basename $1`
@@ -30,7 +30,7 @@ echo "Splitting file into ${CHUNKS} pieces..."
 split -n l/${CHUNKS} /tmp/${fname} ${fname}.part.
 for f in ${fname}.part.*; do
 	echo "Blasting ${f}..."
-	eval $blast $f -out ${f}.out &
+	$BLAST $f -out "${f}.out" &
 	pidlist="$pidlist $!"
 done
 echo "Working... this may take a while..."
