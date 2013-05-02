@@ -28,10 +28,19 @@ cp $1 /tmp/
 cd /tmp/
 echo "Splitting file into ${CHUNKS} pieces..."
 split -n l/${CHUNKS} /tmp/${fname} ${fname}.part.
+b=0
+batchsize=8
 for f in ${fname}.part.*; do
+	b=$((b+1))
 	echo "Blasting ${f}..."
 	$BLAST $f -out "${f}.out" &
-	pidlist="$pidlist $!"
+	pid=$1
+	pidlist="$pidlist $pid"
+	if [ $b==$batchsize ]; then
+		echo "Waiting to launch more jobs (batch limit reached ($batchsize))..."
+		wait $pid
+		b=0
+	fi
 done
 echo "Working... this may take a while..."
 for job in $pidlist; do
