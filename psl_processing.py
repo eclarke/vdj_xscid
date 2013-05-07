@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 """PSL File Processor.
 Description:
     Aggregates the number matches above two thresholds
@@ -56,13 +58,13 @@ if __name__ == '__main__':
             matches = {threshold[0]:0 for threshold in thresholds}
             for i, row in enumerate(psl):
                 accn, idx, pct_id, align_len = parserow(row)
-                if not args["-q"]:
+                if not args["--quiet"]:
                     print "{0}\r".format(i),
                 if not idx:
                     oldidx = idx
                     oldaccn = accn
                 if idx != oldidx:
-                    writer.writerow([oldaccn, oldidx, identical, similar])
+                    writer.writerow([oldaccn, oldidx] + [_ for _ in matches.itervalues()])
                     oldidx = idx
                     oldaccn = accn
                     matches = {threshold[0]:0 for threshold in thresholds}
