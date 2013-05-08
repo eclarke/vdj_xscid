@@ -19,6 +19,7 @@ Options:
 
 import csv, sys
 from docopt import docopt
+from collections import OrderedDict
 
 def frange(_min, _max, step):
     _min = int(_min * 100)
@@ -45,30 +46,38 @@ if __name__ == '__main__':
     step = float(args['--step']) if args['--step'] else 0.05
     thresholds = [(threshold, int(60*threshold)) for threshold 
                     in frange(_min, _max, step)]
-    print thresholds
-
-    print("Your output file is {}".format(outfile))
-    print(outfile)
+    
+    min_id, min_al = thresholds[-1]
+    if not args['--quiet']:
+        print("Thresholds:")
+        [sys.stdout.write("{}|{}\t".format(_id, _al)) for _id, _al in thresholds]
+        print("\n")
+    if not args['--output'] and not args['--quiet']:
+        print("Your output file is {}\n".format(outfile))
     with open(outfile, 'w') as out:
         writer = csv.writer(out, delimiter='\t')
         writer.writerow(["accn", "idx"] + ['id.'+str(int(t[0]*100)) for t in thresholds])
         with open(infile) as psl:
             oldidx = None
             oldaccn = None
-            matches = {threshold[0]:0 for threshold in thresholds}
+            matches = OrderedDict({threshold[0]:0 for threshold in thresholds})
             for i, row in enumerate(psl):
                 accn, idx, pct_id, align_len = parserow(row)
+
                 if not args["--quiet"]:
                     print "{0}\r".format(i),
-                if not idx:
+                if not oldidx:
                     oldidx = idx
                     oldaccn = accn
                 if idx != oldidx:
-                    writer.writerow([oldaccn, oldidx] + [_ for _ in matches.itervalues()])
+                    writer.writerow([oldaccn, oldidx] + [matches[_id] for _id, _al in thresholds])
                     oldidx = idx
                     oldaccn = accn
                     matches = {threshold[0]:0 for threshold in thresholds}
                 for _id, _al in thresholds:
+                    if (pct_id < min_id or align_len < min_al):
+                        break
                     if (pct_id >= _id and align_len >= _al):
                         matches[_id] += 1
-                        continue
+                        break
+
