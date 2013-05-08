@@ -14,6 +14,7 @@ library(Biostrings)
 source("mysql_info.R")
 
 # File info
+root <- "/Volumes/ecl/R/VJD_XSCID"
 unfiltered.path  <-   "data/patients/processed/unfiltered"
 filtered.path <- "data/patients/processed/filtered"
 files <-  list.files(path = unfiltered.path, pattern = glob2rx("*.adap.txt"))
@@ -60,7 +61,7 @@ splitAccnRepl <- function(fname) {
 ##
 ## Note: functions beginning with '.' are internal functions and
 ##       are generally run in a rbind/lapply wrapper.
-.readSeqData <- function(fname) {
+.readSeqData <- function(fname, metadata) {
   dat.tmp <- read.delim(as.character(fname), sep="", header=F, 
                         stringsAsFactors=F)
   meta    <- as.list(subset(metadata, path == fname))
@@ -88,12 +89,25 @@ splitAccnRepl <- function(fname) {
   return(dat.tmp)
 }
 
+.readUnfiltered <- function(metadata) {
+  cat("Reading unfiltered sequence data... \n")
+  df <- do.call(rbind, lapply(metadata$path, .readSeqData, metadata))
+  # Store all the sequences as their reverse complement 
+  # (to allow comparison w/ filtered data)
+  df$seq <- DNAStringSet(as.character(df$seq))
+  df$seq <- as.character(reverseComplement(df$seq))
+  # Convert from factors
+  df$accn <- as.character(df$accn)
+  df$replicate <- as.character(df$replicate)
+  return(df)
+}
+
 ## Write sequence data in FASTA format
-writeSeqToFasta <- function(df) {
+writeSeqToFasta <- function(df, outname, path=root) {
   seqnames <- paste(df$accn, df$replicate, df$idx, sep='_')
   seqs <- df$seq
   names(seqs) <- seqnames
-  fasta.file <- file.path(unfiltered.path, "unfiltered.all.fasta")
+  fasta.file <- file.path(root, outname)
   write.fasta(as.list(seqs), seqnames, file.out=fasta.file)
 }
 
@@ -111,33 +125,74 @@ idSingletons <- function(df) {
   print(summary(repl.singletons))
 }
 
-## Main script method. Source the document then run this function.
-main <- function() {
+
+
+
+
+## Generates the master data frame with the aggregated sequence info. 
+if (TRUE) {
 
   cat("Collecting metadata... \n")
   con <- dbConnect(MySQL(), host=my.host, user=my.user, password=my.pass, dbname=my.db)
-  metadata  <- do.call(rbind, lapply(files, createMetadata, con))
+  metadata  <- do.call(rbind, lapply(files, .createMetadata, con))
 
   cat("Reading unfiltered sequence data... \n")
-  df <- do.call(rbind, lapply(metadata$path, readSeqData))
+  df.unfilt <- do.call(rbind, lapply(metadata$path, .readSeqData, metadata))
   # Store all the sequences as their reverse complement 
   # (to allow comparison w/ filtered data)
-  df$seq <- DNAStringSet(as.character(df$seq))
-  df$seq <- as.character(reverseComplement(df$seq))
+  df.unfilt$seq <- DNAStringSet(as.character(df.unfilt$seq))
+  df.unfilt$seq <- as.character(reverseComplement(df.unfilt$seq))
   # Convert from factors
-  df$accn <- as.character(df$accn)
-  df$replicate <- as.character(df$replicate)
+  df.unfilt$accn <- as.character(df.unfilt$accn)
+  df.unfilt$replicate <- as.character(df.unfilt$replicate)
 
   cat("Reading filtered sequence data... \n")
-  df.filt <- do.call(rbind, lapply(filtered.files, readFiltSeqData, filtered.path))
+  df.filt <- do.call(rbind, lapply(filtered.files, .readFiltSeqData, filtered.path))
 
-  cat("Joining data by sequence, replicate and accession... ")
-  df.tmp <- merge(df, df.filt, by=c("accn", "seq", "replicate"), all=T)
+  cat("Joining data by sequence, replicate and accession... \n")
+  df <- merge(df.unfilt, df.filt, by=c("accn", "seq", "replicate"), all=T)
   # idx is an unique identifier for each row that is used to identify that row
   # when the sequences are processed by external programs (i.e. as a FASTA accn #)
-  df.tmp$idx <- 1:length(df.tmp$seq)
+  df$idx <- 1:length(df$seq)
+  
+  cat("Reading in processed psl file (see psl_processing.py)...")
+  psl <- read.delim(file.path(root, "ig.all.psl.processed"))
+  df <- merge(df, psl, by=c("accn", "idx"))
+  idcols <- colnames(psl)[!colnames(psl) %in% c("accn", "idx")]
+  
+  .pctAboveThreshold <- function(threshold, .df, gt.matches=1) {
+    l = length(.df$idx)
+    a = length(.df$idx[.df[, threshold] > gt.matches])
+    cat("a/l:", a, "/", l, "\t")
+    return(a/l)
+  }
+  
+  matchesAboveCopyNumbers <- function(df, cn.range = 1:3) {
+    matches <- data.frame(sapply(cn.range, 
+                                 function(x) sapply(idcols, .pctAboveThreshold, subset(df, copy==x))))
+    colnames(matches) <- c(paste("cn", cn.range, sep='.'))
+    return(matches)
+  }
+  
+  print(matchesAboveCopyNumbers(df, 1:3))
+  
+  matches <- data.frame(sapply(1:3, function(x) 
+    sapply(idcols, .pctAboveThreshold, subset(df, copy==x))))
+  colnames(matches) <- c(paste("cn", 1:3, sep='.'))
+  for (col in idcols) {
+    cat(col)
+    threshold = substr(col, 4, 5)
+    for (cn in 1:3){
+      .tmp = subset(df, copy==cn)
+      cat(dim(.tmp))
+      cat("\nSequences with copy number", cn, ":", length(.tmp$idx))
+      cat("\n\tNumber of these with > 1 matches at", threshold, "%:", length(.tmp$idx[.tmp[,col] > 1]))
+      cat("\n")
+    }
+  }
   cat("done.\n")
 }
+
 
 
 
