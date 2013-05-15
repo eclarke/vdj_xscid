@@ -14,8 +14,8 @@ library(Biostrings)
 source("mysql_info.R")
 
 # File info
-root <- "/Volumes/ecl/R/VJD_XSCID"
-unfiltered.path  <-   "data/patients/processed/unfiltered"
+root <- "~/vdj_xscid"
+unfiltered.path <- "data/patients/processed/unfiltered"
 filtered.path <- "data/patients/processed/filtered"
 files <-  list.files(path = unfiltered.path, pattern = glob2rx("*.adap.txt"))
 filtered.files <- list.files(path = filtered.path, pattern = glob2rx("*.tsv"))
@@ -102,16 +102,28 @@ splitAccnRepl <- function(fname) {
   return(df)
 }
 
-## Write sequence data in FASTA format
+## Write unique sequences to FASTA format from data frame
 writeSeqToFasta <- function(df, outname, path=root) {
-  seqnames <- paste(df$accn, df$replicate, df$idx, sep='_')
-  seqs <- df$seq
-  names(seqs) <- seqnames
-  fasta.file <- file.path(root, outname)
-  write.fasta(as.list(seqs), seqnames, file.out=fasta.file)
+  .unique <- unique(df$seq)
+  names(.unique) <- 1:length(.unique)
+  outfile <- file.path(root, outname)
+  write.fasta(as.list(.unique), 1:length(.unique), file.out=outfile)
 }
 
-## Identify singletons that
+
+readPSLFile <- function(fname) {
+  psl <- read.delim(fname, stringsAsFactors=F, header=F)
+  colnames(psl) <- c("match", "mismatch", "rep.match", "Ns", "Q.gap.count", 
+                     "Q.gap.bases", "T.gap.count", "T.gap.bases", "strand", 
+                     "Q.name", "Q.size", "Q.start", "Q.end", "T.name", 
+                     "T.size", "T.start", "T.end", "block.count", 
+                     "block.sizes", "q.starts", "t.starts")
+  len <- psl$Q.end - psl$Q.start
+  psl$pct.id <- psl$match / len
+  return(psl)
+}
+
+
 idSingletons <- function(df) {
   singletons <- subset(df, copy == 1, select=c(seq, accn))
   across.replicates <- which(duplicated(singletons))
@@ -125,15 +137,12 @@ idSingletons <- function(df) {
   print(summary(repl.singletons))
 }
 
-
-
-
-
 ## Generates the master data frame with the aggregated sequence info. 
 if (TRUE) {
 
   cat("Collecting metadata... \n")
-  con <- dbConnect(MySQL(), host=my.host, user=my.user, password=my.pass, dbname=my.db)
+  con <- dbConnect(MySQL(), host=my.host, user=my.user, password=my.pass, 
+                   dbname=my.db)
   metadata  <- do.call(rbind, lapply(files, .createMetadata, con))
 
   cat("Reading unfiltered sequence data... \n")
@@ -147,50 +156,78 @@ if (TRUE) {
   df.unfilt$replicate <- as.character(df.unfilt$replicate)
 
   cat("Reading filtered sequence data... \n")
-  df.filt <- do.call(rbind, lapply(filtered.files, .readFiltSeqData, filtered.path))
+  df.filt <- do.call(rbind, lapply(filtered.files, .readFiltSeqData, 
+                     filtered.path))
 
   cat("Joining data by sequence, replicate and accession... \n")
   df <- merge(df.unfilt, df.filt, by=c("accn", "seq", "replicate"), all=T)
-  # idx is an unique identifier for each row that is used to identify that row
-  # when the sequences are processed by external programs (i.e. as a FASTA accn #)
+  # idx is an unique index for each row that is used to identify that row
+  # when the sequences are processed by external programs 
   df$idx <- 1:length(df$seq)
   
+  cat("Writing unique sequences as .fasta file...\n")
+  unique.seq <- unique(df$seq)
+  fasta.file = 'unique.fa'
+  writeSeqToFasta(df, fasta.file)
+  # adds index to each sequence to re-merge with BLAT results
+  unique.seq <- data.frame(cbind(unique.seq, 1:length(unique.seq)))
+  colnames(unique.seq) = c("seq", "idx")
+  unique.seq$idx <- as.integer(as.numeric(unique.seq$idx))
+  # This takes upwards of a couple hours. If it's already done, just ensure
+  # that the variable `psl.file` points to the correct psl output.
+  if (FALSE) {
+    cat("BLAT'ing all sequences against each other...\n")
+    cat("This may take a very long time. Grab a Snickers.\n")
+    min.score = 50
+    system(sprintf('python blat_runner.py -m %i %s', min.score, fasta.file))
+  } 
+
+  psl.file <- 'unique.psl'
+
+  cat("Processing psl file from", psl.file, '...\n')
+  processed.file <- 'unique.processed'
+  psl.max = 0.99
+  psl.min = 0.84
+  system(sprintf('python psl_processing.py --max %1.2f --min %1.2f %s', 
+                 psl.max, psl.min, psl.file))
+
   cat("Reading in processed psl file (see psl_processing.py)...")
-  psl <- read.delim(file.path(root, "ig.all.psl.processed"))
-  df <- merge(df, psl, by=c("accn", "idx"))
-  idcols <- colnames(psl)[!colnames(psl) %in% c("accn", "idx")]
+  psl <- read.delim(processed.file, stringsAsFactors=F)
+  psl$idx <- as.integer(as.numeric(psl$idx))
+  psl <- merge(psl, unique.seq, by=c("idx"))
+  psl$idx <- NULL
+  df <- merge(df, psl, by=c("seq"))
+  idcols <- colnames(psl)[!colnames(psl) %in% c("seq", "idx")]
+  
+  cat("done.\n")
+  
+  all.data <- df
+  filename <- 'all_data.RData'
+  cat("Saved file as", filename)
+  save(all.data, file = filename)
+
+  cat("Starting analysis:")
   
   .pctAboveThreshold <- function(threshold, .df, gt.matches=1) {
     l = length(.df$idx)
     a = length(.df$idx[.df[, threshold] > gt.matches])
-    cat("a/l:", a, "/", l, "\t")
     return(a/l)
   }
   
-  matchesAboveCopyNumbers <- function(df, cn.range = 1:3) {
+  # Returns the percentage of sequences in the given copy number range
+  # that match other sequences at the thresholds given in the psl_processing.py
+  # script (by default 99-84% identity at 5% intervals)
+  matchesAboveCopyNumbers <- function(df, cn.range) {
     matches <- data.frame(sapply(cn.range, 
-                                 function(x) sapply(idcols, .pctAboveThreshold, subset(df, copy==x))))
+                                 function(x) sapply(idcols, 
+                                                    .pctAboveThreshold, 
+                                                    subset(df, copy==x))))
     colnames(matches) <- c(paste("cn", cn.range, sep='.'))
     return(matches)
   }
   
-  print(matchesAboveCopyNumbers(df, 1:3))
-  
-  matches <- data.frame(sapply(1:3, function(x) 
-    sapply(idcols, .pctAboveThreshold, subset(df, copy==x))))
-  colnames(matches) <- c(paste("cn", 1:3, sep='.'))
-  for (col in idcols) {
-    cat(col)
-    threshold = substr(col, 4, 5)
-    for (cn in 1:3){
-      .tmp = subset(df, copy==cn)
-      cat(dim(.tmp))
-      cat("\nSequences with copy number", cn, ":", length(.tmp$idx))
-      cat("\n\tNumber of these with > 1 matches at", threshold, "%:", length(.tmp$idx[.tmp[,col] > 1]))
-      cat("\n")
-    }
-  }
-  cat("done.\n")
+  matches <- matchesAboveCopyNumbers(df, 1:4)
+
 }
 
 

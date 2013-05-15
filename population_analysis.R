@@ -1,7 +1,14 @@
 load('all_data.RData')
+library(data.table)
 
 # isolate just the processed data from Adaptive
 ad.f <- subset(all.data, !is.na(filt.copy))
+ad.f$key <- paste(ad.f$accn, ad.f$seq, sep="_")
+# collapse the replicate copy number data 
+cn <- data.table(ad.f)
+cn <- cn[, list(filt.copy=mean(filt.copy), normalizedCopy=mean(normalizedCopy),
+         normalizedFrequency=mean(normalizedFrequency), 
+         rawFrequency=mean(rawFrequency), accn=accn), by=key]
 
 accns <- unique(ad.f$accn)
 
@@ -39,7 +46,6 @@ accns <- unique(ad.f$accn)
 # Calls the `.test` function on a pairwise comparison between the specified
 # sample replicate and every other replicate of that sample.
 ##
-
 .by.repl <- function(repl, df, repls, accn, column, test, ...) {
     sapply(repls, function(x) .test(accn1 = accn, accn2 = accn, repl1=x, 
                                     repl2 = repl, df=df, column=column, 
