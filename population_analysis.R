@@ -1,17 +1,30 @@
-load('all_data.RData')
-library(data.table)
+library(parallel)
+if (F) {
+  load('all_processed_data.RData')
+  library(data.table)
+  
+  # isolate just the processed data from Adaptive
+  ad.f <- subset(df.filt.all, !is.na(filt.copy))
+  ad.f$key <- paste(ad.f$accn, ad.f$seq, sep="_")
+  # collapse the replicate copy number data 
+  cn <- data.table(ad.f)
+  cn <- cn[, list(filt.copy=mean(filt.copy), normalizedCopy=mean(normalizedCopy),
+                  normalizedFrequency=mean(normalizedFrequency), 
+                  rawFrequency=mean(rawFrequency), accn=accn), by=key]
+  # or, collapse the data according to V and J genes (D is too inconsistent)
+  ad.f$key <- paste(ad.f$accn, ad.f$replicate, ad.f$VGeneName, ad.f$JGeneName)
+  genes <- data.table(ad.f)
+  setkey(genes, key)
+  genes <- genes[, list(filt.copy = sum(filt.copy), 
+                        normalized.copy=sum(normalizedCopy), 
+                        VGeneName=VGeneName, DGeneName=DGeneName, 
+                        JGeneName=JGeneName, accn=accn, 
+                        replicate=replicate), by=key]
 
-# isolate just the processed data from Adaptive
-ad.f <- subset(all.data, !is.na(filt.copy))
-ad.f$key <- paste(ad.f$accn, ad.f$seq, sep="_")
-# collapse the replicate copy number data 
-cn <- data.table(ad.f)
-cn <- cn[, list(filt.copy=mean(filt.copy), normalizedCopy=mean(normalizedCopy),
-         normalizedFrequency=mean(normalizedFrequency), 
-         rawFrequency=mean(rawFrequency), accn=accn), by=key]
-
-accns <- unique(ad.f$accn)
-
+  accns <- unique(ad.f$accn)
+} else if (T) {
+  load("data_collapsed_by_VJgenes.RData")
+}
 
 ##
 # Performs the specified test between one accn/replicate and another
@@ -23,7 +36,7 @@ accns <- unique(ad.f$accn)
 ##
 .test <- function(accn1, accn2, repl1, repl2, df, column = "normalizedCopy",
                   test = ks.test, full=F, t.value = "p.value", ...) {
-    cat(accn1, accn2, repl1, repl2)
+    print(paste(accn1, accn2, repl1, repl2, sep=" "))
     x <- subset(df, accn == accn1 & replicate == repl1 & !is.na(column)
                 )[, column]
     y <- subset(df, accn == accn2 & replicate == repl2 & !is.na(column)
@@ -52,6 +65,15 @@ accns <- unique(ad.f$accn)
                                     test=test, ...))
 }
 
+.by.all <- function(x, all.samples, df, column, test, cl, t.value, full, ...) {
+  cat("X", x, '\n')
+  print(all.samples)
+  parApply(cl = cl, X=all.samples, MARGIN=1, FUN=function(y) {
+    cat("Y", y, '\n')
+    .test(accn1 = x[[1]], accn2 = y[[1]], repl1 = x[[2]], repl2 = y[[2]],
+          df = df, column = column, test = test, t.value = t.value, full, ...) })
+}
+
 ##
 # Performs a pairwise comparison using the specified test against either all
 # samples or all replicates in a sample, using the specified data frame and 
@@ -75,13 +97,47 @@ test.all <- function(test, df, by = "accn", column = "normalizedCopy",
     if (by == "accn") {
         results <- as.matrix(cbind(sapply(accns, .by.accn, df=df, repl="1", 
                              column=column, test=test, full, t.value, ...)))
-    } else {
+    } else if (by == "repl") {
         stopifnot(accn != NULL)
         repls <- unique(ad.f$replicate[ad.f$accn == accn])
         results <- as.matrix(cbind(sapply(repls, .by.repl, repls=repls,
                              df=df, accn=accn, column=column, test=test, 
                              full, t.value, ...)))
+    } else if (by == "all") {
+      # not implemented, use parallel version
     }
     return(results)
 
 }
+
+##
+# Exactly the same as test.all, but accepts a cluster to run the tests in
+# parallel
+##
+par.test.all <- function(test, df, by = "all", column = "filt.copy", 
+                     accn=NULL, full=F, t.value="p.value", ...) {
+  cat("making cluster...")
+  cl <- makeCluster(16)
+  clusterEvalQ(cl, source("population_analysis.R"))
+  if (by == "accn") {
+    results <- as.matrix(cbind(parSapply(cl, accns, .by.accn, df=df, repl="1", 
+                                      column=column, test=test, full, t.value, ...)))
+  } else if (by == "repl") {
+    stopifnot(accn != NULL)
+    repls <- unique(ad.f$replicate[ad.f$accn == accn])
+    results <- as.matrix(cbind(parSapply(cl, repls, .by.repl, repls=repls,
+                                      df=df, accn=accn, column=column, test=test, 
+                                      full, t.value, ...)))
+  } else if (by == "all") {
+    cat("running all by all..\n")
+    all.s <- unique.data.frame(subset(ad.f, select=c('accn', 'replicate')))
+    all.s <- all.s[order(all.s$accn, all.s$replicate),]
+    rownames(all.s) <- paste(all.s$accn, all.s$replicate, sep="_")
+    results <- apply(X=all.s, FUN=.by.all, MARGIN=1, cl=cl, all.samples=all.s, 
+                     df=df, column=column, test=test, t.value=t.value,
+                     full=full, ...)
+  }
+  stopCluster(cl)
+  return(results)
+}
+

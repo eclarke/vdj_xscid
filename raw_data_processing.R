@@ -1,5 +1,5 @@
 ##----------------------------------------------------------------------------
-##  Data processing functions for unfiltered VDJ sequencing data
+##  Data processing functions for VDJ sequencing data from Adaptive
 ##  Erik Clarke (ecl@mail.med.upenn.edu)
 ##----------------------------------------------------------------------------
 library(RMySQL)
@@ -17,9 +17,10 @@ source("mysql_info.R")
 root <- "~/vdj_xscid"
 unfiltered.path <- "data/patients/processed/unfiltered"
 filtered.path <- "data/patients/processed/filtered"
+controls.path <- "data/controls/VDJ_Control_Samples"
 files <-  list.files(path = unfiltered.path, pattern = glob2rx("*.adap.txt"))
 filtered.files <- list.files(path = filtered.path, pattern = glob2rx("*.tsv"))
-
+controls.files <- list.files(path = controls.path, pattern = glob2rx("*.tsv"))
 ## Function definitions
 ##----------------------------------------------------------------------------
 
@@ -77,7 +78,7 @@ splitAccnRepl <- function(fname) {
   accn.repl <- splitAccnRepl(fname)
   .accn <- accn.repl[1]
   .replicate <- accn.repl[2]
-  dat.tmp <- read.delim(file.path(path, as.character(fname)), stringsAsFactors=F)
+  dat.tmp <- read.delim(file.path(path, as.character(fname)), stringsAsFactors=F, na.strings="(undefined)")
   # Renaming 'copy' column to avoid collision with unfiltered sequence df column 
   dat.tmp$filt.copy <- dat.tmp$copy
   dat.tmp$seq <- dat.tmp$nucleotide
@@ -157,14 +158,22 @@ if (TRUE) {
 
   cat("Reading filtered sequence data... \n")
   df.filt <- do.call(rbind, lapply(filtered.files, .readFiltSeqData, 
-                     filtered.path))
+                                   filtered.path))
+  
+  cat("Reading control sequence data... \n")
+  df.ctrl <- do.call(rbind, lapply(controls.files, .readFiltSeqData,
+                                   controls.path))
 
   cat("Joining data by sequence, replicate and accession... \n")
-  df <- merge(df.unfilt, df.filt, by=c("accn", "seq", "replicate"), all=T)
-  # idx is an unique index for each row that is used to identify that row
+  df.filt.all <- merge(df.filt, df.ctrl, all=T)
+  ap <- df.filt.all
+  save(ap, file="all_processed.RData")
+  # change this to TRUE to continue with the rest of the processing (obsolete)
+  stopifnot(F)
+  df <- merge(df.unfilt, df.filt.all, by=c("accn", "seq", "replicate"), all=T)
+    # idx is an unique index for each row that is used to identify that row
   # when the sequences are processed by external programs 
   df$idx <- 1:length(df$seq)
-  
   cat("Writing unique sequences as .fasta file...\n")
   unique.seq <- unique(df$seq)
   fasta.file = 'unique.fa'
