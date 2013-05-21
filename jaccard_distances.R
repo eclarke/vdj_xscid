@@ -89,18 +89,19 @@ pw.uwj.all <- pairwiseOverSamples(samples.all, weighted=F)
 pw.awj.patients <- pairwiseOverSamples(samples.patients, weighted=T)
 pw.uwj.patients <- pairwiseOverSamples(samples.patients, weighted=F)
 
-pc.scatter3d <- function(res.df, color='status', ...) {
+
+pc.scatter3d <- function(res.df, color.by='status', ...) {
     pc <- pcoa(res.df$results)
     df <- data.frame(res.df[1:3])
     pc$df <- cbind(pc$vectors, df)
-    if (color == 'status'){
+    if (color.by == 'status'){
         pc$df$pcolor <- ifelse(pc$df$status == "patient", "red", "blue")
-    } else if (color == 'accn') {
+    } else if (color.by == 'accn') {
+        ## assigns a unique color to each accession number
         a <- unique(df$accn)
         ra <- rainbow(length(a))
         names(ra) <- a
-        print(ra)
-        pc$df$pcolor <- sapply(df$accn, function(x) {cat(x); ra[[x]]})
+        pc$df$pcolor <- sapply(df$accn, function(x) ra[[x]])
     }
 
     PC1 <- pc$df[,'Axis.1']
