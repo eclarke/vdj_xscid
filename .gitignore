@@ -2,5 +2,6 @@
 .RData
 .Rhistory
 data/
+results/
 Immunoseq_VDJ_XSCID/
 mysql_info.R
