@@ -1,0 +1,72 @@
+Jaccard distances for VDJ data
+========================================================
+Load the necessary functions and data:
+
+```{r step}
+knit_hooks$set(webgl = hook_webgl)
+source('../../jaccard_distances.R')
+load("../../species_by_sample.RData")
+```
+
+We create the lists of samples (both patients + controls and just patients):
+
+```{r data prep}
+samples.all <- colnames(species)
+accn.all <- sapply(samples.all, substr, 1, 8)
+samples.patients <- samples.all[5:length(samples.all)]
+accn.patients <- accn.all[5:length(accn.all)]
+```
+
+We then rarefy the species data to compensate for the overabundance of reads
+in certain samples (GTSP0028.1, for instance) to a uniform 300,000 reads/sample.
+
+```{r rarefy}
+s <- rrarefy(t(species), 300000)
+species <- t(s)
+```
+Abundance-weighted Jaccard distance, all samples:
+
+```{r awj.all, webgl=TRUE}
+# Generate pairwise abundance-weighted (.awj) or unweighted (.uwj) Jaccard
+# distances for all samples and just patients
+pw.awj.all <- PairwiseJaccardDistance(samples.all, species, weighted=T)
+DistanceHeatmap(pw.awj.all, na.diag=T, 
+                 main="Abundance-weighted Jaccard Distance")
+pc.awj.all <- DistancePCoA(pw.awj.all)
+PCPlot3D(pc.awj.all, 
+                 main="Abund. Jaccard Distance: Principal Coordinates")
+```
+
+Unweighted Jaccard distance, all samples:
+
+```{r uwj.all, webgl=TRUE}
+pw.uwj.all <- PairwiseJaccardDistance(samples.all, species, weighted=F)
+DistanceHeatmap(pw.uwj.all, na.diag=T, main="Unweighted Jaccard Distance")
+pc.uwj.all <- DistancePCoA(pw.uwj.all)
+PCPlot3D(pc.uwj.all, main="Jaccard Distance: Principal Coordinates")
+```
+
+Abundance-weighted Jaccard distance, patients only:
+
+```{r awj.patients, webgl=TRUE}
+pw.awj.patients <- PairwiseJaccardDistance(samples.patients, species, 
+                                           weighted=T)
+DistanceHeatmap(pw.awj.patients, na.diag=T, 
+                 main="Abund. Jaccard Distance Between Patients")
+pc.awj.patients  <- DistancePCoA(pw.awj.patients)
+PCPlot3D(pc.awj.patients, color.by="accn",
+                 main="Abund. Jaccard btwn Patients: Principal Coordinates")
+```
+
+Unweighted Jaccard distance, patients only:
+
+```{r uwj.patients, webgl=TRUE}
+pw.uwj.patients <- PairwiseJaccardDistance(samples.patients, species,
+                                           weighted=F)
+DistanceHeatmap(pw.uwj.patients, na.diag=T, 
+                 main="Jaccard Distance Between Patients")
+pc.uwj.patients <- DistancePCoA(pw.uwj.patients)
+PCPlot3D(pc.uwj.patients, color.by="accn",
+                 main="Jaccard btwn Patients: Principal Coordinates")
+```
+
