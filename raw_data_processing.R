@@ -171,8 +171,8 @@ if (TRUE) {
   # change this to TRUE to continue with the rest of the processing (obsolete)
   stopifnot(F)
   df <- merge(df.unfilt, df.filt.all, by=c("accn", "seq", "replicate"), all=T)
-    # idx is an unique index for each row that is used to identify that row
-  # when the sequences are processed by external programs 
+  # idx is an unique index for each row that is used to identify that row
+  # when the sequences are processed by external scripts 
   df$idx <- 1:length(df$seq)
   cat("Writing unique sequences as .fasta file...\n")
   unique.seq <- unique(df$seq)

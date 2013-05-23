@@ -11,6 +11,7 @@ if (F) {
   cn <- cn[, list(filt.copy=mean(filt.copy), normalizedCopy=mean(normalizedCopy),
                   normalizedFrequency=mean(normalizedFrequency), 
                   rawFrequency=mean(rawFrequency), accn=accn), by=key]
+  
   # or, collapse the data according to V and J genes (D is too inconsistent)
   ad.f$key <- paste(ad.f$accn, ad.f$replicate, ad.f$VGeneName, ad.f$JGeneName)
   genes <- data.table(ad.f)
